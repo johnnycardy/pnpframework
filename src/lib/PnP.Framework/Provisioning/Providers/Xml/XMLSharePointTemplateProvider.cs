@@ -10,6 +10,11 @@ namespace PnP.Framework.Provisioning.Providers.Xml
         {
         }
 
+        public XMLSharePointTemplateProvider(FileConnectorBase connector) : 
+            base(connector)
+        {
+        }
+
         public XMLSharePointTemplateProvider(ClientRuntimeContext cc, string connectionString, string container) :
             base(new SharePointConnector(cc, connectionString, container))
         {
