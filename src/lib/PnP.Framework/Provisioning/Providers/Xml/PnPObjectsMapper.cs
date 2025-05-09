@@ -181,7 +181,7 @@ namespace PnP.Framework.Provisioning.Providers.Xml
                                 else if (sourceValue != null && dp.PropertyType.IsEnum)
                                 {
                                     // Default conversion for a target enum type
-                                    sourceValue = Enum.Parse(dp.PropertyType, sourceValue.ToString());
+                                    sourceValue = Enum.Parse(dp.PropertyType, sourceValue.ToString(), true);
                                 }
                                 else if (sourceValue != null && dp.PropertyType.Name == "Nullable`1" && dp.PropertyType.GenericTypeArguments[0].IsEnum)
                                 {
