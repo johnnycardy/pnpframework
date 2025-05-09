@@ -23,24 +23,19 @@ namespace PnP.Framework.Provisioning.Providers.Xml.Resolvers
         public object Resolve(object source, Dictionary<String, IResolver> resolvers = null, Boolean recursive = false)
         {
             object result = null;
-            if (null != source)
+            if (null != source && (source is IList sourceList) && sourceList.Count > 0)
             {
-                var sourceList = (IList)source; // This throws an exception if source is empty
+                var resultArray = Array.CreateInstance(this._targetItemType, sourceList.Count);
 
-                if (sourceList.Count > 0)
+                var index = 0;
+                foreach (var i in sourceList)
                 {
-                    var resultArray = Array.CreateInstance(this._targetItemType, sourceList.Count);
-
-                    var index = 0;
-                    foreach (var i in sourceList)
-                    {
-                        var targetItem = Activator.CreateInstance(this._targetItemType, true);
-                        PnPObjectsMapper.MapProperties(i, targetItem, resolvers, recursive);
-                        resultArray.SetValue(targetItem, index);
-                        index++;
-                    }
-                    result = resultArray;
+                    var targetItem = Activator.CreateInstance(this._targetItemType, true);
+                    PnPObjectsMapper.MapProperties(i, targetItem, resolvers, recursive);
+                    resultArray.SetValue(targetItem, index);
+                    index++;
                 }
+                result = resultArray;
             }
             return (result);
         }
