@@ -393,13 +393,15 @@ namespace PnP.Framework.Provisioning.ObjectHandlers
                 web.Context.ExecuteQueryRetry();
             }
 
-            var existingViews = createdList.Views;
-            web.Context.Load(existingViews, vs => vs.Include(v => v.Title, v => v.Id));
-            web.Context.ExecuteQueryRetry();
             var currentViewIndex = 0;
             foreach (var view in list.Views)
             {
                 currentViewIndex++;
+
+                var existingViews = createdList.Views;
+                web.Context.Load(existingViews, vs => vs.Include(v => v.Title, v => v.Id));
+                web.Context.ExecuteQueryRetry();
+
                 CreateView(web, view, existingViews, createdList, scope, parser, currentViewIndex, list.Views.Count);
             }
         }
@@ -702,6 +704,9 @@ namespace PnP.Framework.Provisioning.ObjectHandlers
                 var existingView = existingViews.FirstOrDefault(v => v.Title == viewTitle);
                 if (existingView != null)
                 {
+
+                    //The view may not be deletable
+
                     existingView.DeleteObject();
                     web.Context.ExecuteQueryRetry();
                 }
