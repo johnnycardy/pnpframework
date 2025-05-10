@@ -82,7 +82,7 @@ namespace Microsoft.SharePoint.Client
         /// <param name="userAgent">UserAgent string value to insert for this request. You can define this value in your app's config file using key="SharePointPnPUserAgent" value="PnPRocks"></param>
         public static Task ExecuteQueryRetryAsync(this ClientRuntimeContext clientContext, int retryCount = 10, string userAgent = null)
         {
-            return ExecuteQueryImplementation(clientContext, retryCount, userAgent);
+            return ExecuteQueryImplementationAsync(clientContext, retryCount, userAgent);
         }
 
 
@@ -94,10 +94,194 @@ namespace Microsoft.SharePoint.Client
         /// <param name="userAgent">UserAgent string value to insert for this request. You can define this value in your app's config file using key="SharePointPnPUserAgent" value="PnPRocks"></param>
         public static void ExecuteQueryRetry(this ClientRuntimeContext clientContext, int retryCount = 10, string userAgent = null)
         {
-            Task.Run(() => ExecuteQueryImplementation(clientContext, retryCount, userAgent)).GetAwaiter().GetResult();
+
+#if !NET9_0
+            // Set the TLS preference. Needed on some server os's to work when Office 365 removes support for TLS 1.0
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
+#endif
+
+            var clientTag = string.Empty;
+            if (clientContext is PnPClientContext)
+            {
+                retryCount = (clientContext as PnPClientContext).RetryCount;
+                clientTag = (clientContext as PnPClientContext).ClientTag;
+            }
+
+            int backoffInterval = 500;
+            int retryAttempts = 0;
+            int retryAfterInterval = 0;
+            bool retry = false;
+            ClientRequestWrapper wrapper = null;
+
+            if (retryCount <= 0)
+                throw new ArgumentException("Provide a retry count greater than zero.");
+
+            // Do while retry attempt is less than retry count
+            while (retryAttempts < retryCount)
+            {
+                try
+                {
+                    clientContext.ClientTag = SetClientTag(clientTag);
+
+                    // Make CSOM request more reliable by disabling the return value cache. Given we 
+                    // often clone context objects and the default value is
+                    clientContext.DisableReturnValueCache = true;
+                    // Add event handler to "insert" app decoration header to mark the PnP Sites Core library as a known application
+                    EventHandler<WebRequestEventArgs> appDecorationHandler = AttachRequestUserAgent(userAgent);
+
+                    clientContext.ExecutingWebRequest += appDecorationHandler;
+
+                    // DO NOT CHANGE THIS TO EXECUTEQUERYRETRY
+                    if (!retry)
+                    {
+                        clientContext.ExecuteQuery();
+                    }
+                    else
+                    {
+                        if (wrapper != null && wrapper.Value != null)
+                        {
+                            clientContext.RetryQuery(wrapper.Value);
+                        }
+                    }
+
+                    // Remove the app decoration event handler after the executequery
+                    clientContext.ExecutingWebRequest -= appDecorationHandler;
+
+                    return;
+                }
+                catch (WebException wex)
+                {
+                    var response = wex.Response as HttpWebResponse;
+                    // Check if request was throttled - http status code 429
+                    // Check is request failed due to server unavailable - http status code 503
+                    if ((response != null &&
+                        (response.StatusCode == (HttpStatusCode)429
+                        || response.StatusCode == (HttpStatusCode)503
+                        // || response.StatusCode == (HttpStatusCode)500
+                        ))
+                        || wex.Status == WebExceptionStatus.Timeout)
+                    {
+                        wrapper = (ClientRequestWrapper)wex.Data["ClientRequest"];
+                        retry = true;
+                        retryAfterInterval = 0;
+
+                        //Add delay for retry, retry-after header is specified in seconds
+                        if (response != null && response.Headers["Retry-After"] != null)
+                        {
+                            if (int.TryParse(response.Headers["Retry-After"], out int retryAfterHeaderValue))
+                            {
+                                retryAfterInterval = retryAfterHeaderValue * 1000;
+                            }
+                        }
+                        else
+                        {
+                            retryAfterInterval = backoffInterval;
+                            backoffInterval *= 2;
+                        }
+
+                        if (wex.Status == WebExceptionStatus.Timeout)
+                        {
+                            Log.Warning(Constants.LOGGING_SOURCE, $"CSOM request timeout. Retry attempt {retryAttempts + 1}. Sleeping for {retryAfterInterval} milliseconds before retrying.");
+                        }
+                        else
+                        {
+                            Log.Warning(Constants.LOGGING_SOURCE, $"CSOM request frequency exceeded usage limits. Retry attempt {retryAttempts + 1}. Sleeping for {retryAfterInterval} milliseconds before retrying.");
+                        }
+
+                        System.Threading.Thread.Sleep(retryAfterInterval);
+
+                        //Add to retry count and increase delay.
+                        retryAttempts++;
+                    }
+                    else
+                    {
+                        var errorSb = new System.Text.StringBuilder();
+
+                        errorSb.AppendLine(wex.ToString());
+                        errorSb.AppendLine($"TraceCorrelationId: {clientContext.TraceCorrelationId}");
+                        errorSb.AppendLine($"Url: {clientContext.Url}");
+
+                        //find innermost Error and check if it is a SocketException
+                        Exception innermostEx = wex;
+                        while (innermostEx.InnerException != null) innermostEx = innermostEx.InnerException;
+                        var socketEx = innermostEx as System.Net.Sockets.SocketException;
+                        if (socketEx != null)
+                        {
+                            errorSb.AppendLine($"ErrorCode: {socketEx.ErrorCode}"); //10054
+                            errorSb.AppendLine($"SocketErrorCode: {socketEx.SocketErrorCode}"); //ConnectionReset
+                            errorSb.AppendLine($"Message: {socketEx.Message}"); //An existing connection was forcibly closed by the remote host
+                            Log.Error(Constants.LOGGING_SOURCE, CoreResources.ClientContextExtensions_ExecuteQueryRetryException, errorSb.ToString());
+
+                            // Hostname unknown error code 11001 should not be retried
+                            if (socketEx.ErrorCode == 11001)
+                            {
+                                throw;
+                            }
+
+                            //retry
+                            wrapper = (ClientRequestWrapper)wex.Data["ClientRequest"];
+                            retry = true;
+                            retryAfterInterval = 0;
+
+                            //Add delay for retry, retry-after header is specified in seconds
+                            if (response != null && response.Headers["Retry-After"] != null)
+                            {
+                                if (int.TryParse(response.Headers["Retry-After"], out int retryAfterHeaderValue))
+                                {
+                                    retryAfterInterval = retryAfterHeaderValue * 1000;
+                                }
+                            }
+                            else
+                            {
+                                retryAfterInterval = backoffInterval;
+                                backoffInterval *= 2;
+                            }
+
+                            Log.Warning(Constants.LOGGING_SOURCE, $"CSOM request socket exception. Retry attempt {retryAttempts + 1}. Sleeping for {retryAfterInterval} milliseconds before retrying.");
+
+                            System.Threading.Thread.Sleep(retryAfterInterval);
+
+                            //Add to retry count and increase delay.
+                            retryAttempts++;
+                        }
+                        else
+                        {
+                            if (response != null)
+                            {
+                                //if(response.Headers["SPRequestGuid"] != null) 
+                                if (response.Headers.AllKeys.Any(k => string.Equals(k, "SPRequestGuid", StringComparison.InvariantCultureIgnoreCase)))
+                                {
+                                    var spRequestGuid = response.Headers["SPRequestGuid"];
+                                    errorSb.AppendLine($"ServerErrorTraceCorrelationId: {spRequestGuid}");
+                                }
+                            }
+
+                            Log.Error(Constants.LOGGING_SOURCE, CoreResources.ClientContextExtensions_ExecuteQueryRetryException, errorSb.ToString());
+                            throw;
+                        }
+                    }
+                }
+                catch (ServerException serverEx)
+                {
+                    var errorSb = new System.Text.StringBuilder();
+
+                    errorSb.AppendLine(serverEx.ToString());
+                    errorSb.AppendLine($"ServerErrorCode: {serverEx.ServerErrorCode}");
+                    errorSb.AppendLine($"ServerErrorTypeName: {serverEx.ServerErrorTypeName}");
+                    errorSb.AppendLine($"ServerErrorTraceCorrelationId: {serverEx.ServerErrorTraceCorrelationId}");
+                    errorSb.AppendLine($"ServerErrorValue: {serverEx.ServerErrorValue}");
+                    errorSb.AppendLine($"ServerErrorDetails: {serverEx.ServerErrorDetails}");
+
+                    Log.Error(Constants.LOGGING_SOURCE, CoreResources.ClientContextExtensions_ExecuteQueryRetryException, errorSb.ToString());
+
+                    throw;
+                }
+            }
+
+            throw new MaximumRetryAttemptedException($"Maximum retry attempts {retryCount}, has be attempted.");
         }
 
-        private static async Task ExecuteQueryImplementation(ClientRuntimeContext clientContext, int retryCount = 10, string userAgent = null)
+        private static async Task ExecuteQueryImplementationAsync(ClientRuntimeContext clientContext, int retryCount = 10, string userAgent = null)
         {
 
             await new SynchronizationContextRemover();
