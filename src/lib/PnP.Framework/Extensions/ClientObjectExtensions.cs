@@ -134,7 +134,7 @@ namespace Microsoft.SharePoint.Client
         /// <returns>Property value</returns>
         public static void EnsureProperties<T>(this T clientObject, params Expression<Func<T, object>>[] propertySelector) where T : ClientObject
         {
-            Task.Run(() => EnsurePropertiesImplementation(clientObject, propertySelector)).GetAwaiter().GetResult();
+            EnsurePropertiesImplementation(clientObject, propertySelector);
         }
 
         /// <summary>
@@ -147,9 +147,30 @@ namespace Microsoft.SharePoint.Client
         public static async Task EnsurePropertiesAsync<T>(this T clientObject, params Expression<Func<T, object>>[] propertySelector) where T : ClientObject
         {
             await new SynchronizationContextRemover();
-            await EnsurePropertiesImplementation(clientObject, propertySelector);
+            await EnsurePropertiesImplementationAsync(clientObject, propertySelector);
         }
-        internal static async Task EnsurePropertiesImplementation<T>(this T clientObject, params Expression<Func<T, object>>[] propertySelector) where T : ClientObject
+
+        internal static void EnsurePropertiesImplementation<T>(this T clientObject, params Expression<Func<T, object>>[] propertySelector) where T : ClientObject
+        {
+            bool dirty = EnsurePropertiesWithoutExecution(clientObject, propertySelector);
+
+            if (dirty)
+            {
+                clientObject.Context.ExecuteQueryRetry();
+            }
+        }
+
+        internal static async Task EnsurePropertiesImplementationAsync<T>(this T clientObject, params Expression<Func<T, object>>[] propertySelector) where T : ClientObject
+        {
+            bool dirty = EnsurePropertiesWithoutExecution(clientObject, propertySelector);
+
+            if (dirty)
+            {
+                await clientObject.Context.ExecuteQueryRetryAsync();
+            }
+        }
+
+        private static bool EnsurePropertiesWithoutExecution<T>(T clientObject, Expression<Func<T, object>>[] propertySelector) where T : ClientObject
         {
             var dirty = false;
             foreach (Expression<Func<T, object>> expression in propertySelector)
@@ -188,10 +209,7 @@ namespace Microsoft.SharePoint.Client
                 }
             }
 
-            if (dirty)
-            {
-                await clientObject.Context.ExecuteQueryRetryAsync();
-            }
+            return dirty;
         }
 
         /// <summary>

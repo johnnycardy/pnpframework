@@ -1977,7 +1977,7 @@ namespace Microsoft.SharePoint.Client
                 // Ensure that ListItemAllFields.ServerObjectIsNull is loaded
                 try
                 {
-                    await file.EnsurePropertiesImplementation<File>(f => f.ListItemAllFields, f => f.CheckOutType, f => f.Name);
+                    await file.EnsurePropertiesImplementationAsync<File>(f => f.ListItemAllFields, f => f.CheckOutType, f => f.Name);
                 }
                 catch
                 {
