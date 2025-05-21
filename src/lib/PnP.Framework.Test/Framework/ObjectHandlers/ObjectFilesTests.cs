@@ -17,7 +17,7 @@ namespace PnP.Framework.Test.Framework.ObjectHandlers
     public class ObjectFilesTests
     {
         private string resourceFolder;
-        private const string fileName = "ProvisioningTemplate-2015-03-Sample-01.xml";
+        private const string fileName = "ProvisioningTemplate-2022-09-Sample-01.xml";
         private string folder;
         private readonly string webpartcontents = @"<webParts><webPart xmlns=""http://schemas.microsoft.com/WebPart/v3""><metaData><type name=""Microsoft.SharePoint.WebPartPages.ScriptEditorWebPart, Microsoft.SharePoint, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c"" /><importErrorMessage>Cannot import this Web Part.</importErrorMessage>
     </metaData>
@@ -93,7 +93,7 @@ alert(""Hello!"");
 
             template.Connector = connector;
 
-            template.Files.Add(new PnP.Framework.Provisioning.Model.File() { Overwrite = true, Src = fileName, Folder = folder });
+            template.Files.Add(new PnP.Framework.Provisioning.Model.File() { Overwrite = true, Src = fileName, Folder = "Documents/" + folder });
 
             using (var ctx = TestCommon.CreateClientContext())
             {
